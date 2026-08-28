@@ -2,14 +2,14 @@ services:
   webserver:
     image: linux2-web
     networks:
-      - linux-net
+      - linux2-net
 
   client:
     image: ubuntu
     command: sleep infinity
     networks:
-      - linux-net
+      - linux2-net
 
 networks:
-  linux-net:
+  linux2-net:
     external: true
