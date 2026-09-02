@@ -1,7 +1,18 @@
 from flask import Flask, jsonify, request
 import psycopg2
 import os
+import logging
 
+logging.basicConfig(
+    filename='/app/logs/backend.log',
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s'
+)
+
+logging.info("Backend started")
+
+
+logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
 def get_db_connection():

@@ -17,6 +17,8 @@ services:
       - DB_NAME=miladbooks
     depends_on:
       - db
+    volumes:
+      - backend-logs:/app/logs  
 
   db:
     image: postgres:16
@@ -31,3 +33,4 @@ services:
 
 volumes:
   postgres-data:
+  backend-logs:
