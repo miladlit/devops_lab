@@ -1,66 +1,52 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 import psycopg2
-import os
 import logging
+import os
+import traceback
 
+app = Flask(__name__)
+
+# Logging configuration
 logging.basicConfig(
     filename='/app/logs/backend.log',
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s %(levelname)s %(message)s'
 )
 
 logging.info("Backend started")
 
-
-logging.basicConfig(level=logging.INFO)
-app = Flask(__name__)
-
 def get_db_connection():
-    return psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        database=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
-    )
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD")
+        )
+        return conn
+    except Exception as e:
+        logging.error("Database connection failed:")
+        logging.error(traceback.format_exc())
+        raise
 
 @app.route('/books')
 def get_books():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, title, author FROM books;")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, title, author FROM books")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
 
-    books = []
-    for row in rows:
-        books.append({
-            "id": row[0],
-            "title": row[1],
-            "author": row[2]
-        })
+        books = [{"id": r[0], "title": r[1], "author": r[2]} for r in rows]
+        logging.info("GET /books successful")
+        return jsonify(books)
 
-    return jsonify(books)
-
-@app.route('/books/add', methods=['POST'])
-def add_book():
-    data = request.json
-    title = data.get("title")
-    author = data.get("author")
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO books (title, author) VALUES (%s, %s) RETURNING id;",
-        (title, author)
-    )
-    new_id = cur.fetchone()[0]
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return jsonify({"message": "Book added", "id": new_id})
+    except Exception as e:
+        logging.error("GET /books failed:")
+        logging.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    print("Starting Flask backend...")
     app.run(host='0.0.0.0', port=5000)

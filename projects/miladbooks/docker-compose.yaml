@@ -1,35 +1,52 @@
+version: "3.9"
+
 services:
+  db:
+    image: postgres:16
+    container_name: miladbooks-db-1
+    environment:
+      POSTGRES_USER: milad
+      POSTGRES_PASSWORD: milad123
+      POSTGRES_DB: miladbooks
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: miladbooks-backend
+    container_name: miladbooks-backend-1
+    environment:
+      DB_HOST: db
+      DB_NAME: miladbooks
+      DB_USER: milad
+      DB_PASSWORD: milad123
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
+    volumes:
+      - backend-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/books"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: miladbooks-frontend
+    container_name: miladbooks-frontend-1
     ports:
       - "8080:80"
     depends_on:
       - backend
-
-  backend:
-    build: ./backend
-    ports:
-      - "5000:5000"
-    environment:
-      - DB_HOST=db
-      - DB_USER=milad
-      - DB_PASSWORD=example
-      - DB_NAME=miladbooks
-    depends_on:
-      - db
-    volumes:
-      - backend-logs:/app/logs  
-
-  db:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: milad
-      POSTGRES_PASSWORD: example
-      POSTGRES_DB: miladbooks
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
 
 volumes:
   postgres-data:
