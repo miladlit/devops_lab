@@ -1,2 +1,243 @@
-<h1>MiladBooks</h1>
-<p>Welcome to the book catalog.</p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MiladBooks</title>
+
+    <!-- Force browser to reload fresh version -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            background: linear-gradient(135deg, #6dd5fa, #ff758c);
+            min-height: 100vh;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            font-size: 36px;
+            color: #ffffff;
+            background: rgba(0,0,0,0.25);
+            padding: 20px;
+            border-radius: 12px;
+            display: inline-block;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        #book-list {
+            margin-top: 20px;
+        }
+
+        .book {
+            background: #ffffff;
+            padding: 20px;
+            margin-bottom: 14px;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .book:hover {
+            transform: scale(1.03);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.25);
+        }
+
+        .book span {
+            font-size: 20px;
+            color: #2c3e50;
+        }
+
+        button {
+            margin-left: 10px;
+            padding: 10px 14px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s ease, transform 0.1s ease;
+        }
+
+        button:hover {
+            transform: scale(1.05);
+        }
+
+        .delete-btn {
+            background: #ff4d4d;
+            color: white;
+        }
+
+        .delete-btn:hover {
+            background: #d63031;
+        }
+
+        .update-btn {
+            background: #0984e3;
+            color: white;
+        }
+
+        .update-btn:hover {
+            background: #0652dd;
+        }
+
+        #add-form {
+            margin-top: 30px;
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        #add-form h2 {
+            color: #2c3e50;
+            font-size: 24px;
+        }
+
+        input {
+            padding: 12px;
+            margin-right: 10px;
+            border-radius: 8px;
+            border: 1px solid #b0bec5;
+            width: 200px;
+            font-size: 16px;
+        }
+
+        #message {
+            margin-top: 20px;
+            padding: 14px;
+            border-radius: 8px;
+            display: none;
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        .success {
+            background: #2ecc71;
+            color: white;
+        }
+
+        .error {
+            background: #e74c3c;
+            color: white;
+        }
+
+        #add-button {
+            background: #8e44ad;
+            color: white;
+            padding: 12px 18px;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        #add-button:hover {
+            background: #732d91;
+        }
+    </style>
+</head>
+<body>
+
+<h1>📚 MiladBooks — New UI</h1>
+
+<div id="message"></div>
+
+<div id="book-list"></div>
+
+<div id="add-form">
+    <h2>Add New Book</h2>
+    <input type="text" id="title" placeholder="Title">
+    <input type="text" id="author" placeholder="Author">
+    <button id="add-button" onclick="addBook()">Add Book</button>
+</div>
+
+<script>
+    const API = "http://localhost:5000/books";
+
+    function showMessage(text, type) {
+        const msg = document.getElementById("message");
+        msg.innerText = text;
+        msg.className = type;
+        msg.style.display = "block";
+        setTimeout(() => msg.style.display = "none", 3000);
+    }
+
+    async function loadBooks() {
+        const res = await fetch(API);
+        const books = await res.json();
+
+        const list = document.getElementById("book-list");
+        list.innerHTML = "";
+
+        books.forEach(book => {
+            const div = document.createElement("div");
+            div.className = "book";
+
+            div.innerHTML = `
+                <span>${book.id}. <strong>${book.title}</strong> — ${book.author}</span>
+                <div>
+                    <button class="update-btn" onclick="updateBook(${book.id})">Update</button>
+                    <button class="delete-btn" onclick="deleteBook(${book.id})">Delete</button>
+                </div>
+            `;
+
+            list.appendChild(div);
+        });
+    }
+
+    async function addBook() {
+        const title = document.getElementById("title").value.trim();
+        const author = document.getElementById("author").value.trim();
+
+        if (!title || !author) {
+            showMessage("Both title and author are required.", "error");
+            return;
+        }
+
+        await fetch(API, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({title, author})
+        });
+
+        document.getElementById("title").value = "";
+        document.getElementById("author").value = "";
+
+        showMessage("Book added successfully!", "success");
+        loadBooks();
+    }
+
+    async function deleteBook(id) {
+        await fetch(`${API}/${id}`, { method: "DELETE" });
+        showMessage("Book deleted.", "success");
+        loadBooks();
+    }
+
+    async function updateBook(id) {
+        const newTitle = prompt("New title:");
+        const newAuthor = prompt("New author:");
+
+        if (!newTitle || !newAuthor) {
+            showMessage("Both fields are required.", "error");
+            return;
+        }
+
+        await fetch(`${API}/${id}`, {
+            method: "PUT",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({title: newTitle, author: newAuthor})
+        });
+
+        showMessage("Book updated.", "success");
+        loadBooks();
+    }
+
+    loadBooks();
+</script>
+
+</body>
+</html>
