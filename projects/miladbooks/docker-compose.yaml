@@ -5,35 +5,39 @@ services:
     image: postgres:16
     container_name: miladbooks-db-1
     environment:
+      POSTGRES_DB: miladbooks
       POSTGRES_USER: milad
       POSTGRES_PASSWORD: milad123
-      POSTGRES_DB: miladbooks
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
   backend:
     build: ./backend
     container_name: miladbooks-backend-1
     depends_on:
       - db
-    env_file:
-      - .env
+    environment:
+      DB_HOST: db
+      DB_NAME: miladbooks
+      DB_USER: milad
+      DB_PASSWORD: milad123
     ports:
       - "5000:5000"
-    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    image: miladbooks-frontend
+    build: ./frontend
     container_name: miladbooks-frontend-1
-    ports:
-      - "8080:80"
     depends_on:
       - backend
+    ports:
+      - "8080:80"
 
 volumes:
-  postgres-data:
-  backend-logs:
+  db_data:

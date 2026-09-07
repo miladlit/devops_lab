@@ -2,3 +2,4 @@ Flask
 psycopg2-binary
 flask-cors
 alembic
+python-json-logger

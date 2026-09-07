@@ -1,104 +1,109 @@
 import os
+import time
+import logging
 import psycopg2
-from flask import Flask, jsonify, request
-from flask_cors import CORS
+from flask import Flask, request, jsonify
+from pythonjsonlogger import jsonlogger
 
+# ---------------------------------------------------
+# Logging Configuration (JSON Structured Logging)
+# ---------------------------------------------------
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+log_handler = logging.StreamHandler()
+formatter = jsonlogger.JsonFormatter(
+    "%(asctime)s %(levelname)s %(message)s %(pathname)s %(lineno)d"
+)
+log_handler.setFormatter(formatter)
+logger.addHandler(log_handler)
+
+# ---------------------------------------------------
+# Flask App
+# ---------------------------------------------------
 app = Flask(__name__)
-CORS(app)
 
-# Load environment variables
+# ---------------------------------------------------
+# Database Connection
+# ---------------------------------------------------
 DB_HOST = os.getenv("DB_HOST")
 DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
-FLASK_SECRET = os.getenv("FLASK_SECRET")
 
-app.config["SECRET_KEY"] = FLASK_SECRET
+conn = psycopg2.connect(
+    host=DB_HOST,
+    database=DB_NAME,
+    user=DB_USER,
+    password=DB_PASSWORD
+)
 
-def get_db_connection():
-    return psycopg2.connect(
-        host=DB_HOST,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD
-    )
+# ---------------------------------------------------
+# Request Logging Middleware
+# ---------------------------------------------------
+@app.before_request
+def log_request():
+    request.start_time = time.time()
+    logging.info({
+        "event": "request",
+        "method": request.method,
+        "path": request.path,
+        "remote_addr": request.remote_addr
+    })
 
-@app.route("/books", methods=["GET"])
+@app.after_request
+def log_response(response):
+    duration = round(time.time() - request.start_time, 4)
+    logging.info({
+        "event": "response",
+        "status": response.status_code,
+        "path": request.path,
+        "duration": duration
+    })
+    return response
+
+# ---------------------------------------------------
+# Error Logging
+# ---------------------------------------------------
+@app.errorhandler(Exception)
+def handle_exception(e):
+    logging.error({
+        "event": "error",
+        "error": str(e),
+        "path": request.path
+    })
+    return jsonify({"error": "Internal server error"}), 500
+
+# ---------------------------------------------------
+# Health Endpoints
+# ---------------------------------------------------
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"}), 200
+
+@app.route("/health/db")
+def health_db():
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1;")
+        return jsonify({"status": "ok", "db": "connected"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "db": str(e)}), 500
+
+# ---------------------------------------------------
+# Books Endpoint
+# ---------------------------------------------------
+@app.route("/books")
 def get_books():
-    conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, title, author FROM books ORDER BY id ASC")
+    cur.execute("SELECT id, title, author FROM books;")
     rows = cur.fetchall()
-    cur.close()
-    conn.close()
 
     books = [{"id": r[0], "title": r[1], "author": r[2]} for r in rows]
     return jsonify(books)
 
-@app.route("/books", methods=["POST"])
-def add_book():
-    data = request.json
-    title = data.get("title")
-    author = data.get("author")
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO books (title, author) VALUES (%s, %s) RETURNING id",
-        (title, author)
-    )
-    new_id = cur.fetchone()[0]
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return jsonify({"id": new_id, "title": title, "author": author})
-
-@app.route("/books/<int:book_id>", methods=["GET"])
-def get_book(book_id):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, title, author FROM books WHERE id = %s", (book_id,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-
-    if row:
-        return jsonify({"id": row[0], "title": row[1], "author": row[2]})
-    return jsonify({"message": "Book not found"}), 404
-
-@app.route("/books/<int:book_id>", methods=["PUT"])
-def update_book(book_id):
-    data = request.json
-    title = data.get("title")
-    author = data.get("author")
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE books SET title = %s, author = %s WHERE id = %s",
-        (title, author, book_id)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return jsonify({"id": book_id, "title": title, "author": author})
-
-@app.route("/books/<int:book_id>", methods=["DELETE"])
-def delete_book(book_id):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM books WHERE id = %s", (book_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return jsonify({"message": "Book deleted"})
-
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"})
-
+# ---------------------------------------------------
+# Start App
+# ---------------------------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
