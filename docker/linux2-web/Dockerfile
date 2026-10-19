@@ -1,7 +1,8 @@
 FROM ubuntu:24.04
 
 RUN apt-get update && \
-    apt-get install -y nginx curl iproute2 procps
+    apt-get install -y --no-install-recommends nginx curl iproute2 procps && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY index.html /var/www/html/index.html
 

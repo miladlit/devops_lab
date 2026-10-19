@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>MiladBooks</title>
 
     <!-- Force browser to reload fresh version -->
@@ -144,99 +145,119 @@
 
 <h1>📚 MiladBooks — New UI</h1>
 
-<div id="message"></div>
+<div id="message" role="status" aria-live="polite"></div>
 
 <div id="book-list"></div>
 
 <div id="add-form">
     <h2>Add New Book</h2>
-    <input type="text" id="title" placeholder="Title">
-    <input type="text" id="author" placeholder="Author">
+    <input type="text" id="title" aria-label="Title" maxlength="255" placeholder="Title">
+    <input type="text" id="author" aria-label="Author" maxlength="255" placeholder="Author">
     <button id="add-button" onclick="addBook()">Add Book</button>
 </div>
 
 <script>
-    const API = "http://localhost:5000/books";
+    const API = "/api/books";
 
     function showMessage(text, type) {
         const msg = document.getElementById("message");
-        msg.innerText = text;
+        msg.textContent = text;
         msg.className = type;
         msg.style.display = "block";
-        setTimeout(() => msg.style.display = "none", 3000);
+    }
+
+    async function api(url, options) {
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.error || `Request failed (${response.status})`);
+        }
+        return response.status === 204 ? null : response.json();
     }
 
     async function loadBooks() {
-        const res = await fetch(API);
-        const books = await res.json();
-
+        const books = await api(API);
         const list = document.getElementById("book-list");
-        list.innerHTML = "";
-
-        books.forEach(book => {
+        list.replaceChildren();
+        if (!books.length) list.textContent = "No books yet. Add your first book below.";
+        for (const book of books) {
             const div = document.createElement("div");
             div.className = "book";
-
-            div.innerHTML = `
-                <span>${book.id}. <strong>${book.title}</strong> — ${book.author}</span>
-                <div>
-                    <button class="update-btn" onclick="updateBook(${book.id})">Update</button>
-                    <button class="delete-btn" onclick="deleteBook(${book.id})">Delete</button>
-                </div>
-            `;
-
+            const label = document.createElement("span");
+            label.textContent = `${book.id}. ${book.title} — ${book.author}`;
+            const actions = document.createElement("div");
+            for (const [text, className, action] of [
+                ["Update", "update-btn", () => updateBook(book.id)],
+                ["Delete", "delete-btn", () => deleteBook(book.id)],
+            ]) {
+                const button = document.createElement("button");
+                button.textContent = text;
+                button.className = className;
+                button.addEventListener("click", action);
+                actions.appendChild(button);
+            }
+            div.append(label, actions);
             list.appendChild(div);
-        });
+        }
     }
 
     async function addBook() {
         const title = document.getElementById("title").value.trim();
         const author = document.getElementById("author").value.trim();
-
         if (!title || !author) {
             showMessage("Both title and author are required.", "error");
             return;
         }
-
-        await fetch(API, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({title, author})
-        });
-
-        document.getElementById("title").value = "";
-        document.getElementById("author").value = "";
-
-        showMessage("Book added successfully!", "success");
-        loadBooks();
+        const button = document.getElementById("add-button");
+        button.disabled = true;
+        try {
+            await api(API, {
+                method: "POST", headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({title, author}),
+            });
+            document.getElementById("title").value = "";
+            document.getElementById("author").value = "";
+            showMessage("Book added successfully!", "success");
+            await loadBooks();
+        } catch (error) {
+            showMessage(error.message, "error");
+        } finally {
+            button.disabled = false;
+        }
     }
 
     async function deleteBook(id) {
-        await fetch(`${API}/${id}`, { method: "DELETE" });
-        showMessage("Book deleted.", "success");
-        loadBooks();
+        try {
+            await api(`${API}/${id}`, {method: "DELETE"});
+            showMessage("Book deleted.", "success");
+            await loadBooks();
+        } catch (error) {
+            showMessage(error.message, "error");
+        }
     }
 
     async function updateBook(id) {
-        const newTitle = prompt("New title:");
-        const newAuthor = prompt("New author:");
-
-        if (!newTitle || !newAuthor) {
+        const title = prompt("New title:");
+        if (title === null) return;
+        const author = prompt("New author:");
+        if (author === null) return;
+        if (!title.trim() || !author.trim()) {
             showMessage("Both fields are required.", "error");
             return;
         }
-
-        await fetch(`${API}/${id}`, {
-            method: "PUT",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({title: newTitle, author: newAuthor})
-        });
-
-        showMessage("Book updated.", "success");
-        loadBooks();
+        try {
+            await api(`${API}/${id}`, {
+                method: "PUT", headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({title, author}),
+            });
+            showMessage("Book updated.", "success");
+            await loadBooks();
+        } catch (error) {
+            showMessage(error.message, "error");
+        }
     }
 
-    loadBooks();
+    loadBooks().catch(error => showMessage(error.message, "error"));
 </script>
 
 </body>

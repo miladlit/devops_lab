@@ -1,43 +1,63 @@
-version: "3.9"
+x-db-environment: &db-environment
+  DB_HOST: db
+  DB_NAME: ${DB_NAME:-miladbooks}
+  DB_USER: ${DB_USER:-milad}
+  DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
 
 services:
   db:
     image: postgres:16
-    container_name: miladbooks-db-1
     environment:
-      POSTGRES_DB: miladbooks
-      POSTGRES_USER: milad
-      POSTGRES_PASSWORD: milad123
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${DB_NAME:-miladbooks}
+      POSTGRES_USER: ${DB_USER:-milad}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
     volumes:
       - db_data:/var/lib/postgresql/data
-
-  backend:
-    build: ./backend
-    container_name: miladbooks-backend-1
-    depends_on:
-      - db
-    environment:
-      DB_HOST: db
-      DB_NAME: miladbooks
-      DB_USER: milad
-      DB_PASSWORD: milad123
-    ports:
-      - "5000:5000"
-    logging:
-      driver: "json-file"
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    logging: &logging
+      driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
+  migrate:
+    build: ./backend
+    environment: *db-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "python wait_for_db.py && alembic upgrade head"]
+    logging: *logging
+
+  backend:
+    build: ./backend
+    environment: *db-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health/db', timeout=6)"]
+      interval: 10s
+      timeout: 8s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    logging: *logging
+
   frontend:
     build: ./frontend
-    container_name: miladbooks-frontend-1
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
-      - "8080:80"
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:8080"
+    restart: unless-stopped
+    logging: *logging
 
 volumes:
   db_data:
