@@ -139,15 +139,54 @@
         #add-button:hover {
             background: #732d91;
         }
+        .toolbar, .pagination {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+            margin: 20px 0;
+        }
+        .toolbar { background: white; padding: 18px; border-radius: 12px; }
+        select { padding: 12px; border-radius: 8px; font-size: 16px; }
+        button:disabled { opacity: 0.5; cursor: default; transform: none; }
+        @media (max-width: 600px) {
+            body { margin: 16px; }
+            .book { align-items: flex-start; flex-direction: column; gap: 14px; }
+            input { box-sizing: border-box; max-width: 100%; }
+        }
     </style>
 </head>
 <body>
 
-<h1>📚 MiladBooks — New UI</h1>
+<h1>📚 MiladBooks</h1>
 
 <div id="message" role="status" aria-live="polite"></div>
 
-<div id="book-list"></div>
+<form id="search-form" class="toolbar" role="search">
+    <label for="search">Search books</label>
+    <input id="search" type="search" maxlength="255" placeholder="Title or author">
+    <button type="submit">Search</button>
+    <label for="sort">Sort by</label>
+    <select id="sort">
+        <option value="oldest">Oldest first</option>
+        <option value="newest">Newest first</option>
+        <option value="title">Title A–Z</option>
+        <option value="author">Author A–Z</option>
+    </select>
+    <label for="page-size">Per page</label>
+    <select id="page-size">
+        <option value="10">10</option>
+        <option value="25">25</option>
+        <option value="50">50</option>
+    </select>
+</form>
+<p id="book-count" role="status" aria-live="polite"></p>
+<div id="book-list" aria-busy="false"></div>
+<nav class="pagination" aria-label="Book pages">
+    <button id="previous-page" type="button" disabled>Previous</button>
+    <span id="page-info"></span>
+    <button id="next-page" type="button" disabled>Next</button>
+</nav>
 
 <div id="add-form">
     <h2>Add New Book</h2>
@@ -158,6 +197,9 @@
 
 <script>
     const API = "/api/books";
+    let currentPage = 1;
+    let searchQuery = "";
+    let loadVersion = 0;
 
     function showMessage(text, type) {
         const msg = document.getElementById("message");
@@ -176,10 +218,38 @@
     }
 
     async function loadBooks() {
-        const books = await api(API);
+        const version = ++loadVersion;
         const list = document.getElementById("book-list");
+        list.setAttribute("aria-busy", "true");
+        const params = new URLSearchParams({
+            q: searchQuery, sort: document.getElementById("sort").value,
+            page: currentPage, page_size: document.getElementById("page-size").value,
+        });
+        let result;
+        try {
+            result = await api(`${API}?${params}`);
+        } catch (error) {
+            if (version !== loadVersion) return;
+            throw error;
+        } finally {
+            if (version === loadVersion) list.setAttribute("aria-busy", "false");
+        }
+        if (version !== loadVersion) return;
+        const {books, total, page_size: pageSize} = result;
+        const pages = Math.max(1, Math.ceil(total / pageSize));
+        if (currentPage > pages) {
+            currentPage = pages;
+            return loadBooks();
+        }
+        document.getElementById("book-count").textContent =
+            `${total} ${searchQuery ? "matching " : ""}book${total === 1 ? "" : "s"}`;
+        document.getElementById("page-info").textContent = `Page ${currentPage} of ${pages}`;
+        document.getElementById("previous-page").disabled = currentPage <= 1;
+        document.getElementById("next-page").disabled = currentPage >= pages;
         list.replaceChildren();
-        if (!books.length) list.textContent = "No books yet. Add your first book below.";
+        if (!books.length) list.textContent = searchQuery
+            ? "No books match your search. Try another title or author."
+            : "No books yet. Add your first book below.";
         for (const book of books) {
             const div = document.createElement("div");
             div.className = "book";
@@ -187,7 +257,7 @@
             label.textContent = `${book.id}. ${book.title} — ${book.author}`;
             const actions = document.createElement("div");
             for (const [text, className, action] of [
-                ["Update", "update-btn", () => updateBook(book.id)],
+                ["Update", "update-btn", () => updateBook(book)],
                 ["Delete", "delete-btn", () => deleteBook(book.id)],
             ]) {
                 const button = document.createElement("button");
@@ -236,17 +306,17 @@
         }
     }
 
-    async function updateBook(id) {
-        const title = prompt("New title:");
+    async function updateBook(book) {
+        const title = prompt("Title:", book.title);
         if (title === null) return;
-        const author = prompt("New author:");
+        const author = prompt("Author:", book.author);
         if (author === null) return;
         if (!title.trim() || !author.trim()) {
             showMessage("Both fields are required.", "error");
             return;
         }
         try {
-            await api(`${API}/${id}`, {
+            await api(`${API}/${book.id}`, {
                 method: "PUT", headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({title, author}),
             });
@@ -257,7 +327,30 @@
         }
     }
 
-    loadBooks().catch(error => showMessage(error.message, "error"));
+    function refresh() {
+        return loadBooks().catch(error => showMessage(error.message, "error"));
+    }
+    document.getElementById("search-form").addEventListener("submit", event => {
+        event.preventDefault();
+        searchQuery = document.getElementById("search").value.trim();
+        currentPage = 1;
+        refresh();
+    });
+    for (const id of ["sort", "page-size"]) {
+        document.getElementById(id).addEventListener("change", () => {
+            currentPage = 1;
+            refresh();
+        });
+    }
+    document.getElementById("previous-page").addEventListener("click", () => {
+        currentPage = Math.max(1, currentPage - 1);
+        refresh();
+    });
+    document.getElementById("next-page").addEventListener("click", () => {
+        currentPage += 1;
+        refresh();
+    });
+    refresh();
 </script>
 
 </body>

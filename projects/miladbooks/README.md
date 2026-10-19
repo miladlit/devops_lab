@@ -48,6 +48,25 @@ trimming. Invalid input returns 400, missing books return 404, and database
 failures return 503 without connection details. Operations use independent
 connections and transactions, with rollback and cleanup on failure.
 
+## Browse your library
+
+Search by title or author, sort alphabetically or by creation order, and choose
+10, 25, or 50 books per page. Search ignores case and treats punctuation such as
+`%` and `_` literally. The count reflects all matching books. Editing starts
+with the current title and author; deleting the last book on a page returns you
+to the previous available page.
+
+`GET /api/books?q=linux&sort=title&page=1&page_size=10` returns:
+
+```json
+{"books": [{"id": 1, "title": "Linux", "author": "Milad"}], "total": 1, "page": 1, "page_size": 10}
+```
+
+Supported sort values are `oldest` (default), `newest`, `title`, and `author`.
+Page size is 1–100 (default 10), page is 1–1000000, and search is at most 255
+characters. Requests without `page` or `page_size` retain the original array
+response and can also use search and sorting.
+
 ## Database migrations
 
 ```bash
@@ -68,6 +87,10 @@ Never delete your existing volume to resolve a migration error unless its data
 is disposable.
 
 ## Tests
+
+Browser interaction tests require Node.js 22: `node --test frontend/tests/*.test.cjs`.
+They check safe rendering, search controls, stale responses, edit defaults, and
+page recovery after deletion.
 
 With Python 3.12 and a virtual environment:
 

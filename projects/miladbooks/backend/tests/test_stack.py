@@ -2,6 +2,8 @@
 import json
 import os
 import unittest
+import uuid
+import urllib.parse
 import urllib.error
 import urllib.request
 
@@ -38,6 +40,28 @@ class StackTests(unittest.TestCase):
         self.assertEqual(self.request('/api/books', 'POST', {'title': '', 'author': 'A'})[0], 400)
         self.assertEqual(self.request('/api/missing')[0], 404)
         self.assertEqual(self.request('/api/books', 'PATCH')[0], 405)
+
+    def test_search_and_sort_across_pages(self):
+        marker = uuid.uuid4().hex
+        for title, author in [('Zulu', 'Alice'), ('alpha', 'Bob'), ('Beta', 'Carol')]:
+            status, book = self.request('/api/books', 'POST', {
+                'title': title, 'author': marker + author,
+            })
+            self.assertEqual(status, 201)
+            self.addCleanup(self.request, f"/api/books/{book['id']}", 'DELETE')
+        path = '/api/books?' + urllib.parse.urlencode({
+            'q': marker.upper(), 'sort': 'title', 'page': 1, 'page_size': 2,
+        })
+        status, result = self.request(path)
+        self.assertEqual(status, 200)
+        self.assertEqual(result['total'], 3)
+        self.assertEqual([book['title'] for book in result['books']], ['alpha', 'Beta'])
+        status, result = self.request(path.replace('page=1', 'page=2'))
+        self.assertEqual([book['title'] for book in result['books']], ['Zulu'])
+        status, result = self.request(path.replace('page=1', 'page=3'))
+        self.assertEqual(result['books'], [])
+        self.assertEqual(result['total'], 3)
+        self.assertEqual(self.request('/api/books?page_size=101')[0], 400)
 
 
 if __name__ == '__main__':

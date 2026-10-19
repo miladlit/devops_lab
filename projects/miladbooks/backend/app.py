@@ -93,9 +93,36 @@ def serialize_book(row):
 
 @app.get("/books")
 def get_books():
+    query = request.args.get("q", "").strip()
+    sort = request.args.get("sort", "oldest")
+    orders = {
+        "oldest": "id ASC", "newest": "id DESC",
+        "title": "lower(title) ASC, id ASC", "author": "lower(author) ASC, id ASC",
+    }
+    if len(query) > 255 or sort not in orders:
+        return jsonify(error="Invalid search or sort option"), 400
+    paginated = "page" in request.args or "page_size" in request.args
+    try:
+        page = int(request.args.get("page", "1"))
+        page_size = int(request.args.get("page_size", "10"))
+        if not 1 <= page <= 1000000 or not 1 <= page_size <= 100:
+            raise ValueError
+    except ValueError:
+        return jsonify(error="Page must be 1–1000000 and page_size must be 1–100"), 400
+    where = " WHERE strpos(lower(title), lower(%s)) > 0 OR strpos(lower(author), lower(%s)) > 0"
+    params = (query, query)
     with database() as cursor:
-        cursor.execute("SELECT id, title, author FROM books ORDER BY id")
+        if paginated:
+            cursor.execute("SELECT count(*) FROM books" + where, params)
+            total = cursor.fetchone()[0]
+        sql = "SELECT id, title, author FROM books" + where + " ORDER BY " + orders[sort]
+        if paginated:
+            sql += " LIMIT %s OFFSET %s"
+            params += (page_size, (page - 1) * page_size)
+        cursor.execute(sql, params)
         books = [serialize_book(row) for row in cursor.fetchall()]
+    if paginated:
+        return jsonify(books=books, total=total, page=page, page_size=page_size)
     return jsonify(books)
 
 

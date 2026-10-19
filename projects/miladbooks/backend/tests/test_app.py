@@ -29,6 +29,45 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json['title'], 'Updated')
         self.assertEqual(self.client.delete('/books/1').status_code, 204)
 
+    def test_search_sort_and_pagination(self):
+        self.cursor.fetchone.return_value = (23,)
+        self.cursor.fetchall.return_value = [(12, 'Linux', 'Milad')]
+        response = self.client.get('/books?q=LINUX&sort=title&page=2&page_size=10')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json, {
+            'books': [{'id': 12, 'title': 'Linux', 'author': 'Milad'}],
+            'total': 23, 'page': 2, 'page_size': 10,
+        })
+        sql, params = self.cursor.execute.call_args.args
+        self.assertIn('ORDER BY lower(title) ASC, id ASC LIMIT %s OFFSET %s', sql)
+        self.assertEqual(params, ('LINUX', 'LINUX', 10, 10))
+
+    def test_search_is_literal_and_parameterized(self):
+        self.cursor.fetchall.return_value = []
+        query = "100%_';--"
+        response = self.client.get('/books', query_string={'q': query, 'sort': 'newest'})
+        self.assertEqual(response.status_code, 200)
+        sql, params = self.cursor.execute.call_args.args
+        self.assertNotIn(query, sql)
+        self.assertEqual(params, (query, query))
+        self.assertIn('strpos', sql)
+        self.assertIn('ORDER BY id DESC', sql)
+
+    def test_invalid_list_options_do_not_touch_database(self):
+        for query in ['page=0', 'page=-1', 'page=abc', 'page=1000001',
+                      'page_size=0', 'page_size=101', 'page_size=1.5',
+                      'sort=title;DROP TABLE books', 'q=' + 'x' * 256]:
+            with self.subTest(query=query):
+                self.assertEqual(self.client.get('/books?' + query).status_code, 400)
+        self.cursor.execute.assert_not_called()
+
+    def test_empty_page_retains_total(self):
+        self.cursor.fetchone.return_value = (3,)
+        self.cursor.fetchall.return_value = []
+        response = self.client.get('/books?page=2&page_size=10')
+        self.assertEqual(response.json['books'], [])
+        self.assertEqual(response.json['total'], 3)
+
     def test_invalid_payloads_do_not_touch_database(self):
         for data in [None, [], {}, {'title': 4, 'author': 'A'},
                      {'title': ' ', 'author': 'A'}, {'title': 'x' * 256, 'author': 'A'}]:
