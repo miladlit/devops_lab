@@ -59,13 +59,36 @@ to the previous available page.
 `GET /api/books?q=linux&sort=title&page=1&page_size=10` returns:
 
 ```json
-{"books": [{"id": 1, "title": "Linux", "author": "Milad"}], "total": 1, "page": 1, "page_size": 10}
+{"books": [{"id": 1, "title": "Linux", "author": "Milad", "status": "to_read"}], "total": 1, "page": 1, "page_size": 10}
 ```
 
 Supported sort values are `oldest` (default), `newest`, `title`, and `author`.
 Page size is 1–100 (default 10), page is 1–1000000, and search is at most 255
 characters. Requests without `page` or `page_size` retain the original array
 response and can also use search and sorting.
+
+## Reading progress
+
+Every book has a reading status: **To read**, **Reading**, or **Finished**. Change
+it using the dropdown beside the book. Use the reading-status filter alongside
+search and sorting to browse a shelf. The library summary shows totals across
+all books, while the result count reflects the active filters.
+
+New and existing books default to `to_read`. Migration `0002` adds the status
+column, validates its allowed values, and creates an index without deleting
+books. Restart the stack after rebuilding to apply pending migrations:
+
+```bash
+docker compose up -d --build --wait --wait-timeout 180
+```
+
+- `POST /api/books` accepts an optional `status` (`to_read`, `reading`, `finished`).
+- `PATCH /api/books/<id>/status` accepts `{"status":"reading"}` and returns the updated book.
+- `GET /api/books?status=finished&page=1` filters results; search and sorting still apply.
+- `GET /api/books/stats` returns `total`, `to_read`, `reading`, and `finished` counts.
+
+Book responses include `status`. Updating title and author with PUT preserves the
+saved reading status. Invalid statuses return 400 and missing books return 404.
 
 ## Database migrations
 

@@ -11,6 +11,7 @@ from logging_config import configure_logging
 configure_logging()
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
+READING_STATUSES = ("to_read", "reading", "finished")
 
 
 @contextmanager
@@ -88,18 +89,19 @@ def book_values():
 
 
 def serialize_book(row):
-    return dict(zip(("id", "title", "author"), row))
+    return dict(zip(("id", "title", "author", "status"), row))
 
 
 @app.get("/books")
 def get_books():
     query = request.args.get("q", "").strip()
     sort = request.args.get("sort", "oldest")
+    status = request.args.get("status", "")
     orders = {
         "oldest": "id ASC", "newest": "id DESC",
         "title": "lower(title) ASC, id ASC", "author": "lower(author) ASC, id ASC",
     }
-    if len(query) > 255 or sort not in orders:
+    if len(query) > 255 or sort not in orders or (status and status not in READING_STATUSES):
         return jsonify(error="Invalid search or sort option"), 400
     paginated = "page" in request.args or "page_size" in request.args
     try:
@@ -109,13 +111,16 @@ def get_books():
             raise ValueError
     except ValueError:
         return jsonify(error="Page must be 1–1000000 and page_size must be 1–100"), 400
-    where = " WHERE strpos(lower(title), lower(%s)) > 0 OR strpos(lower(author), lower(%s)) > 0"
+    where = " WHERE (strpos(lower(title), lower(%s)) > 0 OR strpos(lower(author), lower(%s)) > 0)"
     params = (query, query)
+    if status:
+        where += " AND status = %s"
+        params += (status,)
     with database() as cursor:
         if paginated:
             cursor.execute("SELECT count(*) FROM books" + where, params)
             total = cursor.fetchone()[0]
-        sql = "SELECT id, title, author FROM books" + where + " ORDER BY " + orders[sort]
+        sql = "SELECT id, title, author, status FROM books" + where + " ORDER BY " + orders[sort]
         if paginated:
             sql += " LIMIT %s OFFSET %s"
             params += (page_size, (page - 1) * page_size)
@@ -131,10 +136,13 @@ def add_book():
     values = book_values()
     if values is None:
         return jsonify(error="Title and author must contain 1–255 characters"), 400
+    status = request.get_json().get("status", "to_read")
+    if status not in READING_STATUSES:
+        return jsonify(error="Invalid reading status"), 400
     with database() as cursor:
         cursor.execute(
-            "INSERT INTO books (title, author) VALUES (%s, %s) RETURNING id, title, author",
-            values,
+            "INSERT INTO books (title, author, status) VALUES (%s, %s, %s) RETURNING id, title, author, status",
+            (*values, status),
         )
         book = serialize_book(cursor.fetchone())
     return jsonify(book), 201
@@ -147,7 +155,7 @@ def update_book(book_id):
         return jsonify(error="Title and author must contain 1–255 characters"), 400
     with database() as cursor:
         cursor.execute(
-            "UPDATE books SET title = %s, author = %s WHERE id = %s RETURNING id, title, author",
+            "UPDATE books SET title = %s, author = %s WHERE id = %s RETURNING id, title, author, status",
             (*values, book_id),
         )
         row = cursor.fetchone()
@@ -164,3 +172,28 @@ def delete_book(book_id):
     if row is None:
         return jsonify(error="Book not found"), 404
     return "", 204
+
+
+@app.patch("/books/<int:book_id>/status")
+def update_status(book_id):
+    data = request.get_json()
+    if not isinstance(data, dict) or data.get("status") not in READING_STATUSES:
+        return jsonify(error="Status must be to_read, reading, or finished"), 400
+    with database() as cursor:
+        cursor.execute(
+            "UPDATE books SET status = %s WHERE id = %s RETURNING id, title, author, status",
+            (data["status"], book_id),
+        )
+        row = cursor.fetchone()
+    if row is None:
+        return jsonify(error="Book not found"), 404
+    return jsonify(serialize_book(row))
+
+
+@app.get("/books/stats")
+def book_stats():
+    with database() as cursor:
+        cursor.execute("SELECT status, count(*) FROM books GROUP BY status")
+        counts = {status: 0 for status in READING_STATUSES}
+        counts.update(dict(cursor.fetchall()))
+    return jsonify(total=sum(counts.values()), **counts)

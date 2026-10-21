@@ -63,6 +63,26 @@ class StackTests(unittest.TestCase):
         self.assertEqual(result['total'], 3)
         self.assertEqual(self.request('/api/books?page_size=101')[0], 400)
 
+    def test_reading_progress_persists_and_filters(self):
+        marker = uuid.uuid4().hex
+        status, book = self.request('/api/books', 'POST', {'title': marker, 'author': 'Reader'})
+        self.assertEqual(status, 201)
+        self.assertEqual(book['status'], 'to_read')
+        book_id = book['id']
+        self.addCleanup(self.request, f'/api/books/{book_id}', 'DELETE')
+        status, changed = self.request(f'/api/books/{book_id}/status', 'PATCH', {'status': 'reading'})
+        self.assertEqual(status, 200)
+        self.assertEqual(changed['status'], 'reading')
+        self.assertEqual(self.request(f'/api/books?q={marker}&status=to_read&page=1')[1]['total'], 0)
+        result = self.request(f'/api/books?q={marker}&status=reading&page=1')[1]
+        self.assertEqual(result['books'], [changed])
+        status, edited = self.request(f'/api/books/{book_id}', 'PUT', {'title': marker, 'author': 'Edited'})
+        self.assertEqual(edited['status'], 'reading')
+        status, stats = self.request('/api/books/stats')
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(stats['reading'], 1)
+        self.assertEqual(stats['total'], sum(stats[key] for key in ['to_read', 'reading', 'finished']))
+
 
 if __name__ == '__main__':
     unittest.main()

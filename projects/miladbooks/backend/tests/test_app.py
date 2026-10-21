@@ -14,16 +14,16 @@ class ApiTests(unittest.TestCase):
 
     def test_crud_and_parameterized_values(self):
         title = "Robert'); DROP TABLE books;--"
-        self.cursor.fetchone.return_value = (1, title, 'Author')
+        self.cursor.fetchone.return_value = (1, title, 'Author', 'to_read')
         response = self.client.post('/books', json={'title': title, 'author': 'Author'})
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json['title'], title)
         sql, params = self.cursor.execute.call_args.args
         self.assertNotIn(title, sql)
-        self.assertEqual(params, (title, 'Author'))
-        self.cursor.fetchall.return_value = [(1, title, 'Author')]
+        self.assertEqual(params, (title, 'Author', 'to_read'))
+        self.cursor.fetchall.return_value = [(1, title, 'Author', 'to_read')]
         self.assertEqual(self.client.get('/books').json, [response.json])
-        self.cursor.fetchone.return_value = (1, 'Updated', 'Writer')
+        self.cursor.fetchone.return_value = (1, 'Updated', 'Writer', 'reading')
         response = self.client.put('/books/1', json={'title': 'Updated', 'author': 'Writer'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json['title'], 'Updated')
@@ -31,11 +31,11 @@ class ApiTests(unittest.TestCase):
 
     def test_search_sort_and_pagination(self):
         self.cursor.fetchone.return_value = (23,)
-        self.cursor.fetchall.return_value = [(12, 'Linux', 'Milad')]
+        self.cursor.fetchall.return_value = [(12, 'Linux', 'Milad', 'finished')]
         response = self.client.get('/books?q=LINUX&sort=title&page=2&page_size=10')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json, {
-            'books': [{'id': 12, 'title': 'Linux', 'author': 'Milad'}],
+            'books': [{'id': 12, 'title': 'Linux', 'author': 'Milad', 'status': 'finished'}],
             'total': 23, 'page': 2, 'page_size': 10,
         })
         sql, params = self.cursor.execute.call_args.args
@@ -67,6 +67,53 @@ class ApiTests(unittest.TestCase):
         response = self.client.get('/books?page=2&page_size=10')
         self.assertEqual(response.json['books'], [])
         self.assertEqual(response.json['total'], 3)
+
+    def test_status_updates_and_validation(self):
+        self.cursor.fetchone.return_value = (1, 'Linux', 'Milad', 'reading')
+        response = self.client.patch('/books/1/status', json={'status': 'reading'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['status'], 'reading')
+        self.assertEqual(self.cursor.execute.call_args.args[1], ('reading', 1))
+        self.cursor.fetchone.return_value = None
+        self.assertEqual(self.client.patch('/books/99/status', json={'status': 'finished'}).status_code, 404)
+        for payload in [{}, [], {'status': None}, {'status': []}, {'status': 'unknown'}]:
+            with self.subTest(payload=payload):
+                self.assertEqual(self.client.patch('/books/1/status', json=payload).status_code, 400)
+        self.assertEqual(self.client.post('/books', json={
+            'title': 'Book', 'author': 'Author', 'status': 'unknown',
+        }).status_code, 400)
+
+    def test_create_with_status_and_edit_without_resetting_status(self):
+        self.cursor.fetchone.return_value = (8, 'Book', 'Author', 'finished')
+        response = self.client.post('/books', json={
+            'title': 'Book', 'author': 'Author', 'status': 'finished',
+        })
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json['status'], 'finished')
+        self.assertEqual(self.cursor.execute.call_args.args[1], ('Book', 'Author', 'finished'))
+        response = self.client.put('/books/8', json={'title': 'Edited', 'author': 'Writer'})
+        self.assertEqual(response.status_code, 200)
+        sql, params = self.cursor.execute.call_args.args
+        self.assertNotIn('SET status', sql)
+        self.assertEqual(params, ('Edited', 'Writer', 8))
+
+    def test_status_filter_combines_with_title_or_author_search(self):
+        self.cursor.fetchone.return_value = (0,)
+        self.cursor.fetchall.return_value = []
+        response = self.client.get('/books?q=Linux&status=finished&page=1')
+        self.assertEqual(response.status_code, 200)
+        sql, params = self.cursor.execute.call_args.args
+        self.assertIn(') AND status = %s', sql)
+        self.assertEqual(params, ('Linux', 'Linux', 'finished', 10, 0))
+        self.assertEqual(self.client.get('/books?status=invalid').status_code, 400)
+
+    def test_library_stats_including_empty_shelves(self):
+        self.cursor.fetchall.return_value = [('to_read', 3), ('finished', 2)]
+        self.assertEqual(self.client.get('/books/stats').json, {
+            'total': 5, 'to_read': 3, 'reading': 0, 'finished': 2,
+        })
+        self.cursor.fetchall.return_value = []
+        self.assertEqual(self.client.get('/books/stats').json['total'], 0)
 
     def test_invalid_payloads_do_not_touch_database(self):
         for data in [None, [], {}, {'title': 4, 'author': 'A'},

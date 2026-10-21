@@ -162,6 +162,7 @@
 
 <div id="message" role="status" aria-live="polite"></div>
 
+<p id="library-stats" role="status" aria-live="polite"></p>
 <form id="search-form" class="toolbar" role="search">
     <label for="search">Search books</label>
     <input id="search" type="search" maxlength="255" placeholder="Title or author">
@@ -172,6 +173,13 @@
         <option value="newest">Newest first</option>
         <option value="title">Title A–Z</option>
         <option value="author">Author A–Z</option>
+    </select>
+    <label for="status-filter">Reading status</label>
+    <select id="status-filter">
+        <option value="">All books</option>
+        <option value="to_read">To read</option>
+        <option value="reading">Reading</option>
+        <option value="finished">Finished</option>
     </select>
     <label for="page-size">Per page</label>
     <select id="page-size">
@@ -197,6 +205,7 @@
 
 <script>
     const API = "/api/books";
+    const STATUS_LABELS = {to_read: "To read", reading: "Reading", finished: "Finished"};
     let currentPage = 1;
     let searchQuery = "";
     let loadVersion = 0;
@@ -222,12 +231,19 @@
         const list = document.getElementById("book-list");
         list.setAttribute("aria-busy", "true");
         const params = new URLSearchParams({
-            q: searchQuery, sort: document.getElementById("sort").value,
+            q: searchQuery, status: document.getElementById("status-filter").value, sort: document.getElementById("sort").value,
             page: currentPage, page_size: document.getElementById("page-size").value,
         });
         let result;
         try {
-            result = await api(`${API}?${params}`);
+            const [booksResult, stats] = await Promise.all([
+                api(`${API}?${params}`), api(`${API}/stats`),
+            ]);
+            result = booksResult;
+            if (version === loadVersion) {
+                document.getElementById("library-stats").textContent =
+                    `Library: ${stats.total} books · ${stats.to_read} to read · ${stats.reading} reading · ${stats.finished} finished`;
+            }
         } catch (error) {
             if (version !== loadVersion) return;
             throw error;
@@ -242,13 +258,13 @@
             return loadBooks();
         }
         document.getElementById("book-count").textContent =
-            `${total} ${searchQuery ? "matching " : ""}book${total === 1 ? "" : "s"}`;
+            `${total} ${searchQuery || document.getElementById("status-filter").value ? "matching " : ""}book${total === 1 ? "" : "s"}`;
         document.getElementById("page-info").textContent = `Page ${currentPage} of ${pages}`;
         document.getElementById("previous-page").disabled = currentPage <= 1;
         document.getElementById("next-page").disabled = currentPage >= pages;
         list.replaceChildren();
-        if (!books.length) list.textContent = searchQuery
-            ? "No books match your search. Try another title or author."
+        if (!books.length) list.textContent = searchQuery || document.getElementById("status-filter").value
+            ? "No books match these filters. Try another search or reading status."
             : "No books yet. Add your first book below.";
         for (const book of books) {
             const div = document.createElement("div");
@@ -256,6 +272,33 @@
             const label = document.createElement("span");
             label.textContent = `${book.id}. ${book.title} — ${book.author}`;
             const actions = document.createElement("div");
+            const status = document.createElement("select");
+            status.setAttribute("aria-label", `Reading status for ${book.title}`);
+            for (const [value, text] of Object.entries(STATUS_LABELS)) {
+                const option = document.createElement("option");
+                option.value = value;
+                option.textContent = text;
+                status.appendChild(option);
+            }
+            status.value = book.status;
+            status.addEventListener("change", async () => {
+                status.disabled = true;
+                try {
+                    const updated = await api(`${API}/${book.id}/status`, {
+                        method: "PATCH", headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({status: status.value}),
+                    });
+                    book.status = updated.status;
+                    showMessage("Reading status updated.", "success");
+                    await loadBooks();
+                } catch (error) {
+                    status.value = book.status;
+                    showMessage(error.message, "error");
+                } finally {
+                    status.disabled = false;
+                }
+            });
+            actions.appendChild(status);
             for (const [text, className, action] of [
                 ["Update", "update-btn", () => updateBook(book)],
                 ["Delete", "delete-btn", () => deleteBook(book.id)],
@@ -336,7 +379,7 @@
         currentPage = 1;
         refresh();
     });
-    for (const id of ["sort", "page-size"]) {
+    for (const id of ["sort", "page-size", "status-filter"]) {
         document.getElementById(id).addEventListener("change", () => {
             currentPage = 1;
             refresh();

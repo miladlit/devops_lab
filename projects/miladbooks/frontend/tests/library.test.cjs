@@ -20,7 +20,7 @@ function element() {
 }
 function start(handler) {
     const nodes = {};
-    for (const id of ['sort', 'page-size', 'book-list', 'book-count', 'page-info',
+    for (const id of ['status-filter', 'library-stats', 'sort', 'page-size', 'book-list', 'book-count', 'page-info',
         'previous-page', 'next-page', 'message', 'search-form', 'search', 'title', 'author', 'add-button']) {
         nodes[id] = element();
     }
@@ -31,6 +31,7 @@ function start(handler) {
         URLSearchParams,
         document: {getElementById: id => nodes[id], createElement: element},
         fetch: async (url, options) => {
+            if (url.endsWith('/stats')) return response({total: 4, to_read: 2, reading: 1, finished: 1});
             calls.push({url, options});
             return handler(url, options);
         },
@@ -114,4 +115,43 @@ test('deleting the last book on a page returns to an available page', async () =
     assert.equal(nodes['page-info'].textContent, 'Page 1 of 1');
     assert.equal(new URLSearchParams(calls.at(-1).url.split('?')[1]).get('page'), '1');
     assert.equal(nodes['next-page'].disabled, true);
+});
+
+
+test('reading status filters reset pagination and updates refresh library counts', async () => {
+    const book = {id: 4, title: 'Linux', author: 'Author', status: 'to_read'};
+    const {nodes, calls} = start((url, options) => {
+        if (options?.method === 'PATCH') return response({...book, status: 'reading'});
+        return response(page([book], 20));
+    });
+    await settle();
+    assert.match(nodes['library-stats'].textContent, /2 to read · 1 reading · 1 finished/);
+    const select = nodes['book-list'].children[0].children[1].children[0];
+    assert.equal(select.value, 'to_read');
+    select.value = 'reading';
+    await select.events.change();
+    const update = calls.find(call => call.options?.method === 'PATCH');
+    assert.equal(update.url, '/api/books/4/status');
+    assert.deepEqual(JSON.parse(update.options.body), {status: 'reading'});
+    nodes['next-page'].events.click();
+    await settle();
+    nodes['status-filter'].value = 'finished';
+    nodes['status-filter'].events.change();
+    await settle();
+    const params = new URLSearchParams(calls.at(-1).url.split('?')[1]);
+    assert.equal(params.get('page'), '1');
+    assert.equal(params.get('status'), 'finished');
+});
+
+test('a failed reading status update restores the saved selection', async () => {
+    const book = {id: 4, title: 'Linux', author: 'Author', status: 'to_read'};
+    const {nodes} = start((url, options) => options?.method === 'PATCH'
+        ? response({error: 'Database unavailable'}, 503) : response(page([book])));
+    await settle();
+    const select = nodes['book-list'].children[0].children[1].children[0];
+    select.value = 'finished';
+    await select.events.change();
+    assert.equal(select.value, 'to_read');
+    assert.equal(select.disabled, false);
+    assert.equal(nodes.message.textContent, 'Database unavailable');
 });
