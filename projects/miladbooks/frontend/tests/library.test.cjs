@@ -20,7 +20,7 @@ function element() {
 }
 function start(handler) {
     const nodes = {};
-    for (const id of ['status-filter', 'library-stats', 'sort', 'page-size', 'book-list', 'book-count', 'page-info',
+    for (const id of ['clear-goal', 'goal-year', 'goal-target', 'goal-form', 'goal-summary', 'goal-feedback', 'goal-progress', 'save-goal', 'undated-books', 'status-filter', 'library-stats', 'sort', 'page-size', 'book-list', 'book-count', 'page-info',
         'previous-page', 'next-page', 'message', 'search-form', 'search', 'title', 'author', 'add-button']) {
         nodes[id] = element();
     }
@@ -31,6 +31,7 @@ function start(handler) {
         URLSearchParams,
         document: {getElementById: id => nodes[id], createElement: element},
         fetch: async (url, options) => {
+            if (url.startsWith('/api/reading-progress/')) return response({year: 2026, target: null, finished: 0, remaining: null, percent: null, undated_finished: 0});
             if (url.endsWith('/stats')) return response({total: 4, to_read: 2, reading: 1, finished: 1});
             calls.push({url, options});
             return handler(url, options);
@@ -47,7 +48,7 @@ test('renders book text safely and sends search/sort/page controls', async () =>
     const book = {id: 1, title: '<img onerror=alert(1)>', author: 'Author'};
     const {nodes, calls} = start(() => response(page([book], 30)));
     await settle();
-    assert.equal(nodes['book-list'].children[0].children[0].textContent, '1. <img onerror=alert(1)> — Author');
+    assert.equal(nodes['book-list'].children[0].children[0].children[0].textContent, '1. <img onerror=alert(1)> — Author');
     assert.equal(nodes['book-count'].textContent, '30 books');
     nodes['next-page'].events.click();
     await settle();
@@ -74,7 +75,7 @@ test('a late search response cannot replace newer results', async () => {
     await context.loadBooks();
     firstResolve(response(page([{id: 1, title: 'Old', author: 'A'}])));
     await settle();
-    assert.equal(nodes['book-list'].children[0].children[0].textContent, '2. Current — A');
+    assert.equal(nodes['book-list'].children[0].children[0].children[0].textContent, '2. Current — A');
     assert.equal(nodes['book-list']['aria-busy'], 'false');
 });
 
@@ -154,4 +155,106 @@ test('a failed reading status update restores the saved selection', async () => 
     assert.equal(select.value, 'to_read');
     assert.equal(select.disabled, false);
     assert.equal(nodes.message.textContent, 'Database unavailable');
+});
+
+
+test('review editor prefills values, renders notes safely, and saves a cleared rating', async () => {
+    const book = {id: 9, title: 'Book', author: 'Writer', status: 'finished', rating: 4, notes: '<script>text</script>'};
+    const {nodes, calls} = start((url, options) => options?.method === 'PATCH'
+        ? response({...book, rating: null, notes: 'Updated'}) : response(page([book])));
+    await settle();
+    const content = nodes['book-list'].children[0].children[0];
+    assert.equal(content.children[1].textContent, 'Rating: ★★★★ (4/5)');
+    assert.equal(content.children[2].textContent, '<script>text</script>');
+    const form = content.children[3].children[1];
+    const rating = form.children[0].children[0];
+    const notes = form.children[1].children[0];
+    assert.equal(rating.value, '4');
+    assert.equal(notes.value, '<script>text</script>');
+    rating.value = '';
+    notes.value = 'Updated';
+    await form.events.submit({preventDefault() {}});
+    const call = calls.find(call => call.url.endsWith('/review'));
+    assert.deepEqual(JSON.parse(call.options.body), {rating: null, notes: 'Updated'});
+    assert.equal(nodes.message.textContent, 'Rating and notes saved.');
+});
+
+test('failed review saves keep the draft available for retry', async () => {
+    const book = {id: 9, title: 'Book', author: 'Writer', status: 'to_read', rating: null, notes: ''};
+    const {nodes} = start((url, options) => options?.method === 'PATCH'
+        ? response({error: 'Database unavailable'}, 503) : response(page([book])));
+    await settle();
+    const form = nodes['book-list'].children[0].children[0].children[3].children[1];
+    form.children[1].children[0].value = 'Unsaved note';
+    await form.events.submit({preventDefault() {}});
+    assert.equal(form.children[1].children[0].value, 'Unsaved note');
+    assert.equal(form.children[2].disabled, false);
+    assert.equal(form.children[3].textContent, 'Database unavailable');
+});
+
+
+test('yearly dashboard saves goals and displays progress and unknown dates', async () => {
+    const {nodes, context, calls} = start(() => response(page()));
+    await settle();
+    context.fetch = async (url, options) => {
+        calls.push({url, options});
+        if (options?.method === 'PUT') return response({year: 2026, target: 12});
+        return response({year: 2026, target: 12, finished: 5, remaining: 7, percent: 41.7, undated_finished: 2});
+    };
+    nodes['goal-year'].value = '2026';
+    nodes['goal-target'].value = '12';
+    await nodes['goal-form'].events.submit({preventDefault() {}});
+    const save = calls.find(call => call.url === '/api/reading-goals/2026');
+    assert.deepEqual(JSON.parse(save.options.body), {target: 12});
+    assert.match(nodes['goal-summary'].textContent, /5 of 12 books finished · 7 remaining/);
+    assert.equal(nodes['goal-progress'].value, 41.7);
+    assert.match(nodes['undated-books'].textContent, /2 finished books have no completion date/);
+    context.fetch = async () => response({year: 2026, target: 2, finished: 3, remaining: 0, percent: 150, undated_finished: 0});
+    await context.loadProgress();
+    assert.equal(nodes['goal-progress'].value, 100);
+    assert.match(nodes['goal-summary'].textContent, /Goal reached!/);
+});
+
+test('failed goal saves preserve target and report the failure', async () => {
+    const {nodes, context} = start(() => response(page()));
+    await settle();
+    context.fetch = async () => response({error: 'Database unavailable'}, 503);
+    nodes['goal-target'].value = '30';
+    await nodes['goal-form'].events.submit({preventDefault() {}});
+    assert.equal(nodes['goal-target'].value, '30');
+    assert.equal(nodes['goal-feedback'].textContent, 'Database unavailable');
+    assert.equal(nodes['save-goal'].disabled, false);
+});
+
+test('finished books can save a known completion date', async () => {
+    const book = {id: 6, title: 'Book', author: 'Writer', status: 'finished', rating: null, notes: '', finished_on: null};
+    const {nodes, calls} = start((url, options) => options?.method === 'PATCH'
+        ? response({...book, finished_on: '2025-12-31'}) : response(page([book])));
+    await settle();
+    const form = nodes['book-list'].children[0].children[0].children[4];
+    form.children[0].children[0].value = '2025-12-31';
+    await form.events.submit({preventDefault() {}});
+    const saved = calls.find(call => call.options?.method === 'PATCH');
+    assert.deepEqual(JSON.parse(saved.options.body), {status: 'finished', finished_on: '2025-12-31'});
+});
+
+
+test('library refresh preserves a goal draft and clearing a goal resets the dashboard', async () => {
+    const {nodes, context} = start(() => response(page()));
+    await settle();
+    nodes['goal-target'].value = '25';
+    nodes['goal-target'].events.input();
+    await context.loadProgress();
+    assert.equal(nodes['goal-target'].value, '25');
+    const calls = [];
+    context.fetch = async (url, options) => {
+        calls.push({url, options});
+        return options?.method === 'DELETE' ? response(null, 204)
+            : response({year: 2026, target: null, finished: 3, undated_finished: 0, percent: null});
+    };
+    await nodes['clear-goal'].events.click();
+    assert.equal(calls[0].options.method, 'DELETE');
+    assert.equal(nodes['goal-target'].value, '');
+    assert.equal(nodes['goal-progress'].value, 0);
+    assert.match(nodes['goal-summary'].textContent, /Set a goal/);
 });

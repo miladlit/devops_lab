@@ -62,7 +62,7 @@ to the previous available page.
 {"books": [{"id": 1, "title": "Linux", "author": "Milad", "status": "to_read"}], "total": 1, "page": 1, "page_size": 10}
 ```
 
-Supported sort values are `oldest` (default), `newest`, `title`, and `author`.
+Supported sort values are `oldest` (default), `newest`, `title`, `author`, and `rating`.
 Page size is 1–100 (default 10), page is 1–1000000, and search is at most 255
 characters. Requests without `page` or `page_size` retain the original array
 response and can also use search and sorting.
@@ -89,6 +89,58 @@ docker compose up -d --build --wait --wait-timeout 180
 
 Book responses include `status`. Updating title and author with PUT preserves the
 saved reading status. Invalid statuses return 400 and missing books return 404.
+
+## Ratings and personal notes
+
+Open **Edit rating and notes** on any book to choose 1–5 stars and write a note
+(up to 2000 characters). Choose **Not rated** to clear a rating. Notes are plain
+text and can be cleared by saving an empty editor. Failed saves keep the draft
+available for retry. **Highest rated** sorting places unrated books last.
+
+`PATCH /api/books/<id>/review` accepts `rating`, `notes`, or both:
+
+```json
+{"rating": 5, "notes": "Useful examples; revisit the networking chapter."}
+```
+
+Omitted fields are preserved. `rating: null` clears a rating; `notes: ""` clears
+notes. Invalid ratings, unknown fields, and notes over 2000 characters return
+400; missing books return 404. Book responses now include `rating` and `notes`.
+Title, author, and reading-status updates preserve these fields.
+
+Migration `0003` adds the new fields without changing existing books: their
+rating is initially null and their notes are empty. Apply it with the standard
+rebuild command documented above. Notes belong to this shared library; the app
+has no separate user accounts.
+
+## Reading goals and progress dashboard
+
+Set a yearly target (1–10000 books) in **Your reading year**. The dashboard shows
+finished books, the goal, remaining books, and percentage complete. Change the
+year to view another year's goal. **Clear goal** removes the target while keeping
+books and completion dates. Counts cover the whole library regardless of search
+or shelf filters. Progress can exceed 100%; the bar fills at 100%.
+
+Marking a book **Finished** records today's UTC date. A finished book's date editor
+lets you enter its actual completion date, including a date in a previous year.
+Dates must be valid and cannot be in the future. Repeating the same Finished
+status preserves its date. Moving a book to Reading or To read clears the date;
+finishing it again records a new date. This tracks the current completion of each
+book, rather than a history of rereads. Deleting a finished book removes it from
+progress totals.
+
+Migration `0004` adds goals and completion dates without guessing dates for
+previously finished books. Those books appear in the dashboard's undated count;
+enter their dates to include them in the correct year. Goals are shared across
+this library, like books and notes.
+
+- `GET /api/reading-progress/<year>` returns `target`, `finished`, `remaining`, `percent`, and `undated_finished`. A missing goal has a null target, remaining, and percent.
+- `PUT /api/reading-goals/<year>` accepts `{"target": 24}` to create or update a goal.
+- `DELETE /api/reading-goals/<year>` clears a goal (HTTP 204).
+- `PATCH /api/books/<id>/status` also accepts `finished_on` in `YYYY-MM-DD` form when status is `finished`.
+
+Years must be 1900–9998. Book responses include nullable `finished_on`. Rebuild
+and start the stack to apply pending migrations before using the new dashboard.
 
 ## Database migrations
 

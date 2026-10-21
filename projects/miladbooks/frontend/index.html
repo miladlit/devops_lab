@@ -139,6 +139,14 @@
         #add-button:hover {
             background: #732d91;
         }
+        .dashboard { background: white; padding: 20px; border-radius: 12px; }
+        .dashboard .toolbar { padding: 0; }
+        .dashboard progress { width: 100%; height: 24px; }
+        .review-editor { margin-top: 16px; padding: 12px; background: #f6f8fa; border-radius: 8px; }
+        .review-editor label { display: block; margin: 8px 0; }
+        .review-editor textarea { box-sizing: border-box; width: 100%; min-height: 100px; padding: 10px; font: inherit; }
+        .book-content { flex: 1; min-width: 0; width: 100%; }
+        .book-content p { white-space: pre-wrap; overflow-wrap: anywhere; }
         .toolbar, .pagination {
             display: flex;
             flex-wrap: wrap;
@@ -162,6 +170,21 @@
 
 <div id="message" role="status" aria-live="polite"></div>
 
+<section class="dashboard" aria-labelledby="dashboard-heading">
+    <h2 id="dashboard-heading">Your reading year</h2>
+    <form id="goal-form" class="toolbar">
+        <label for="goal-year">Year</label>
+        <input id="goal-year" type="number" min="1900" max="9998" required>
+        <label for="goal-target">Books to finish</label>
+        <input id="goal-target" type="number" min="1" max="10000" required placeholder="Set a yearly target">
+        <button id="save-goal" type="submit">Save goal</button>
+        <button id="clear-goal" type="button">Clear goal</button>
+    </form>
+    <p id="goal-summary" role="status" aria-live="polite"></p>
+    <progress id="goal-progress" max="100" value="0" aria-label="Yearly reading goal"></progress>
+    <p id="goal-feedback" role="status" aria-live="polite"></p>
+    <p id="undated-books"></p>
+</section>
 <p id="library-stats" role="status" aria-live="polite"></p>
 <form id="search-form" class="toolbar" role="search">
     <label for="search">Search books</label>
@@ -173,6 +196,7 @@
         <option value="newest">Newest first</option>
         <option value="title">Title A–Z</option>
         <option value="author">Author A–Z</option>
+        <option value="rating">Highest rated</option>
     </select>
     <label for="status-filter">Reading status</label>
     <select id="status-filter">
@@ -209,6 +233,8 @@
     let currentPage = 1;
     let searchQuery = "";
     let loadVersion = 0;
+    let progressVersion = 0;
+    let goalDraft = false;
 
     function showMessage(text, type) {
         const msg = document.getElementById("message");
@@ -309,9 +335,125 @@
                 button.addEventListener("click", action);
                 actions.appendChild(button);
             }
-            div.append(label, actions);
+            const content = document.createElement("div");
+            content.className = "book-content";
+            const rating = document.createElement("p");
+            rating.textContent = book.rating ? `Rating: ${"★".repeat(book.rating)} (${book.rating}/5)` : "Not rated";
+            const notes = document.createElement("p");
+            notes.textContent = book.notes || "No notes yet.";
+            content.append(label, rating, notes, reviewEditor(book));
+            if (book.status === "finished") content.appendChild(completionEditor(book));
+            div.append(content, actions);
             list.appendChild(div);
         }
+        await loadProgress();
+    }
+
+    async function loadProgress() {
+        const version = ++progressVersion;
+        const year = Number(document.getElementById("goal-year").value);
+        if (!Number.isInteger(year) || year < 1900 || year > 9998) {
+            document.getElementById("goal-feedback").textContent = "Choose a year between 1900 and 9998.";
+            return;
+        }
+        try {
+            const data = await api(`/api/reading-progress/${year}`);
+            if (version !== progressVersion) return;
+            if (!goalDraft) document.getElementById("goal-target").value = data.target ?? "";
+            document.getElementById("goal-summary").textContent = data.target
+                ? `${year}: ${data.finished} of ${data.target} books finished · ${data.remaining} remaining · ${data.percent}%${data.remaining === 0 ? " — Goal reached!" : ""}`
+                : `${year}: ${data.finished} books finished. Set a goal to track your progress.`;
+            document.getElementById("goal-progress").value = Math.min(100, data.percent ?? 0);
+            document.getElementById("undated-books").textContent = data.undated_finished
+                ? `${data.undated_finished} finished books have no completion date. Add dates on those books to include them in the correct year.` : "";
+            document.getElementById("goal-feedback").textContent = "";
+        } catch (error) {
+            if (version === progressVersion) document.getElementById("goal-feedback").textContent = error.message;
+        }
+    }
+
+    function completionEditor(book) {
+        const form = document.createElement("form");
+        const label = document.createElement("label");
+        label.textContent = "Finished on ";
+        const input = document.createElement("input");
+        input.type = "date";
+        input.required = true;
+        input.max = new Date().toISOString().slice(0, 10);
+        input.value = book.finished_on || "";
+        label.appendChild(input);
+        const button = document.createElement("button");
+        button.type = "submit";
+        button.textContent = "Save completion date";
+        form.append(label, button);
+        form.addEventListener("submit", async event => {
+            event.preventDefault();
+            button.disabled = true;
+            try {
+                await api(`${API}/${book.id}/status`, {
+                    method: "PATCH", headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({status: "finished", finished_on: input.value}),
+                });
+                showMessage("Completion date saved.", "success");
+                await loadBooks();
+            } catch (error) {
+                showMessage(error.message, "error");
+            } finally {
+                button.disabled = false;
+            }
+        });
+        return form;
+    }
+
+    function reviewEditor(book) {
+        const details = document.createElement("details");
+        details.className = "review-editor";
+        const summary = document.createElement("summary");
+        summary.textContent = "Edit rating and notes";
+        const form = document.createElement("form");
+        const ratingLabel = document.createElement("label");
+        ratingLabel.textContent = "Your rating ";
+        const rating = document.createElement("select");
+        for (let value = 0; value <= 5; value++) {
+            const option = document.createElement("option");
+            option.value = value ? String(value) : "";
+            option.textContent = value ? `${value} / 5` : "Not rated";
+            rating.appendChild(option);
+        }
+        rating.value = book.rating ? String(book.rating) : "";
+        ratingLabel.appendChild(rating);
+        const notesLabel = document.createElement("label");
+        notesLabel.textContent = "Personal notes (up to 2000 characters)";
+        const notes = document.createElement("textarea");
+        notes.maxLength = 2000;
+        notes.value = book.notes || "";
+        notesLabel.appendChild(notes);
+        const save = document.createElement("button");
+        save.type = "submit";
+        save.textContent = "Save rating and notes";
+        const feedback = document.createElement("p");
+        feedback.setAttribute("role", "status");
+        form.append(ratingLabel, notesLabel, save, feedback);
+        form.addEventListener("submit", async event => {
+            event.preventDefault();
+            save.disabled = true;
+            try {
+                await api(`${API}/${book.id}/review`, {
+                    method: "PATCH", headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({rating: rating.value ? Number(rating.value) : null, notes: notes.value}),
+                });
+                feedback.textContent = "Saved.";
+                showMessage("Rating and notes saved.", "success");
+                await loadBooks();
+            } catch (error) {
+                feedback.textContent = error.message;
+                showMessage(error.message, "error");
+            } finally {
+                save.disabled = false;
+            }
+        });
+        details.append(summary, form);
+        return details;
     }
 
     async function addBook() {
@@ -392,6 +534,49 @@
     document.getElementById("next-page").addEventListener("click", () => {
         currentPage += 1;
         refresh();
+    });
+    document.getElementById("goal-year").value = new Date().getFullYear();
+    document.getElementById("goal-target").addEventListener("input", () => { goalDraft = true; });
+    document.getElementById("goal-year").addEventListener("change", () => {
+        goalDraft = false;
+        loadProgress();
+    });
+    document.getElementById("clear-goal").addEventListener("click", async () => {
+        const button = document.getElementById("clear-goal");
+        const year = Number(document.getElementById("goal-year").value);
+        button.disabled = true;
+        try {
+            await api(`/api/reading-goals/${year}`, {method: "DELETE"});
+            goalDraft = false;
+            await loadProgress();
+        } catch (error) {
+            document.getElementById("goal-feedback").textContent = error.message;
+        } finally {
+            button.disabled = false;
+        }
+    });
+    document.getElementById("goal-form").addEventListener("submit", async event => {
+        event.preventDefault();
+        const year = Number(document.getElementById("goal-year").value);
+        const target = Number(document.getElementById("goal-target").value);
+        const button = document.getElementById("save-goal");
+        button.disabled = true;
+        try {
+            if (!Number.isInteger(year) || year < 1900 || year > 9998 ||
+                    !Number.isInteger(target) || target < 1 || target > 10000) {
+                throw new Error("Choose a valid year and a target between 1 and 10000.");
+            }
+            await api(`/api/reading-goals/${year}`, {
+                method: "PUT", headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({target}),
+            });
+            goalDraft = false;
+            await loadProgress();
+        } catch (error) {
+            document.getElementById("goal-feedback").textContent = error.message;
+        } finally {
+            button.disabled = false;
+        }
     });
     refresh();
 </script>
